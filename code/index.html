@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>WebGPU Ray Tracer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script type="module" defer src="/src/main.ts"></script>
+</head>
+<body>
+<div id="container">
+  <div id="diagnostics">
+
+    <h4>ms / frame: <span id="frame-time"></span> ms</h4>
+    <h4>Frames / Second: <span id="fps"></span></h4>
+    <div id="object-controls" class="control-group">
+      <h3>Object Controls</h3>
+      
+
+    </div>
+    
+  </div>
+  <div id="canvas-container">
+    <h1 id="fallback"></h1>
+
+    <canvas id="GLCanvas" width="800" height="600"></canvas>
+    
+    <div class="control-group">
+      <h3>Camera Controls</h3>
+      <label for="fov">Field of View: <span id="fov-val"></span></label> </br>
+      <input type="range" id="fov" class="range" name="fov" min="60" max="120" value="90">
+      <label for="sens">Mouse Sensitivity: <span id="sens-val"></span></label> </br>
+      <input type="range" id="sens" class="range" name="sens" min="0.0001" max="0.01" step= "0.0001" value="0.004"></br>
+      <button id="reset-camera">Reset Camera</button >
+    </div>
+
+  </div>
+  <div id="controls">
+
+    <div class="control-group">
+      <h3>BVH</h3>
+      <button id="toggleBVH-btn" class="toggle-btn ">Toggle BVH</button> </d>
+
+      <h3>BVH Visual</h3>
+      <button id="showBVHBoxes-btn" class="toggle-btn ">Toggle BVH Boxes Visual</button>
+      <button id="hideRootBVHBox-btn" class="toggle-btn ">Hide Root BVH Boxes</button> </br>
+      <button id="depthBVH-btn" class="toggle-btn active">Depth test on BVH Boxes</button> 
+    </div>
+    <div class="control-group">
+      <h3>Acceleration Structures</h3>
+      <button id="temporalAccumulation-btn" class="toggle-btn ">Toggle Temporal Accumulation</button>
+      <button id="accumulateFrames-btn" class="toggle-btn">Accumulate Frames</button>
+
+     
+    </div>
+    <div class="control-group">
+      <h3>Scene Controls</h3>
+      <input type="radio" id="scene1" name="scene" value="1" checked>
+      <label for="scene">Scene 1</label>
+
+      </br>
+      <input type="radio" id="scene2" name="scene" value="2" >
+      <label for="scene">Scene 2</label> </br>
+      <label for="numSpheres">Number of Spheres: <span id="numSpheres-val"></span></label> </br>
+      <input type="range" id="numSpheres" class="range" name="numSpheres" min="2" max="500" value="5">
+    </div>
+  
+    <div class="control-group">
+      <label for="diffuseType">Lighting: </label>
+      <br/>
+      <button id="hasGammaCorrection-btn" class="toggle-btn active">Toggle Gamma Correction</button>
+      <br/>
+      <div>
+      Sky Color: <input type="color" id="skyColorInput" >
+      <button id="reset-skyColor">Reset</button >
+    </div>
+      <select name="diffuseType" id="diffuseType">
+        <option value="0" selected>Simple Diffuse</option>
+        <option value="1">Lambertian</option>
+
+      </select>
+      <div class="control-group">
+        <label for="bounces">Number of Ray Bounces: <span id="bounces-val"></span></label> </br>
+        <input type="range" id="bounces" class="range" name="bounces" min="1" max="100" value="10">
+      </div>
+    </div>
+    
+  </div>
+</div>
+</body>
+
+</html>

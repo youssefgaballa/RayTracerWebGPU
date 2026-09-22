@@ -1,0 +1,394 @@
+import { mat4, vec3 } from "gl-matrix";
+import { Interval } from "./BVH/interval";
+import { Renderer } from "./renderer";
+type keysPressedType = {
+  w:     boolean,
+  a:     boolean,
+  s:     boolean,
+  d:     boolean,
+  up:    boolean,
+  down:  boolean
+}
+
+export class Camera {
+  position: Float32Array;
+  /* Spherical coordinate system:
+     is same as en.wikipedia.org/wiki/Spherical_coordinate_system except: 
+     WebGPU uses a left handed coordinate system with y-axis pointing up
+     and the wikipedia page uses right handed system with z-axis up.
+     So we swap the roles of the y axis and z-axis in the right handed system.
+     So the calculation of y in this.forwards is the calculation of z in a 
+     right handed coordinate system, and vice versa
+  */
+  
+  /*
+    Polar Angle (theta): betweeen the y-axis and polar axis
+    Range: [0, Math.PI] 
+    Need to make sure we dont go under 0 or over Math.PI or the camera could flip
+  */
+  pitch: number;
+  pitchInterval: Interval = new Interval(0 + 0.001, Math.PI - 0.001);
+
+  /*
+    Azimuthal Angle (phi): between x-axis and projection of the polar axis on x-z plane 
+    Range: [-infinity, infinity]
+    Doesnt need to be clamped. values are effectively in [0, 2 * Math.PI] range.
+  */
+  yaw: number;
+  
+  forwards!: Float32Array;
+  right!: Float32Array;
+  up!: Float32Array;
+
+  fov: number;
+  fovSlider: HTMLButtonElement 
+  = document.getElementById("fov") as HTMLButtonElement;
+  fovSpan: HTMLButtonElement 
+  = document.getElementById("fov-val") as HTMLButtonElement;
+
+  sensitivity!: number;
+  sensSlider: HTMLButtonElement 
+  = document.getElementById("sens") as HTMLButtonElement;
+  sensSpan: HTMLSpanElement 
+  = document.getElementById("sens-val") as HTMLSpanElement;
+
+  resetButton: HTMLButtonElement 
+  = document.getElementById("reset-camera") as HTMLButtonElement;
+
+  projectionMatrix!: Float32Array;
+  viewMatrix!: Float32Array;
+  viewProjectionMatrix!: mat4;
+  inverseViewProjectionMatrix!: mat4;
+
+  speeds = {
+    normal: 0.006,
+    fast: 0.02
+  }
+  speed: number = this.speeds.normal;
+  
+  keysPressed: keysPressedType =  {
+    w: false,
+    a: false,
+    s: false,
+    d: false,
+
+    up: false,
+    down: false
+  };
+  mouseActive: boolean = false;
+  /*
+    Need updatedCamera boolean so that when it is true,
+    the accumulation buffer is cleared and the boolean is reset to false.
+    This way the accumulation buffer doesnt contain data from previous frames in which
+    the camera is in a different position
+  */
+  public updatedCamera: boolean = false;
+  private debug0 = false;
+
+  /*
+  When I click on the canvas, the pointer lock function call requestPointerLock needs to be 
+  awaited. We must only set isPointerLocked to true after this function is done.
+  This boolean enables the mousemove event listeners
+  */
+  isPointerLocked: boolean = false;
+  initialTransform: {
+    position: Float32Array;
+    pitch: number;
+    yaw: number;
+    speed: number;
+    sensitivity: number;
+    fov: number;
+    keysPressed: keysPressedType;
+    mouseActive: boolean;
+  }
+
+  constructor(position: number[]) {
+    this.position = new Float32Array(position);
+    // looking at +Z
+    this.pitch = this.pitchInterval.clamp(Math.PI / 2);
+    this.yaw = Math.PI / 2;
+    this.fov = 75;
+    this.recalculate_vectors();
+    this.registerInputListeners();
+    this.initialTransform = {
+      position: new Float32Array(this.position),
+      pitch: this.pitch,
+      yaw: this.yaw,
+      speed: this.speeds.normal,
+      sensitivity: this.sensitivity,
+      fov: this.fov,
+      keysPressed: {
+        w: false,
+        a: false,
+        s: false,
+        d: false,
+    
+        up: false,
+        down: false
+      },
+      mouseActive: false,
+    }
+  }
+
+  recalculate_vectors() {
+
+    this.forwards = new Float32Array([
+      Math.sin(this.pitch) * Math.cos(this.yaw) , // x
+      Math.cos(this.pitch),                                  // y
+      Math.sin(this.pitch) * Math.sin(this.yaw) , // z
+    ]);
+
+    const fov_radians = (this.fov * Math.PI) / 180.0;
+    // const fov_factor = Math.tan(fov_radians / 2.0);
+
+    this.right = new Float32Array([0.0, 0.0, 0.0]);
+    vec3.cross(this.right, [0.0, 1.0, 0.0], this.forwards);
+    vec3.normalize(this.right, this.right); 
+
+    this.up = new Float32Array([0.0, 0.0, 0.0]);
+    vec3.cross(this.up, this.forwards, this.right);
+    vec3.normalize(this.up, this.up);
+
+    const aspect = Renderer.canvas.clientWidth / Renderer.canvas.clientHeight;
+    const zNear = 0.1;
+    const zFar = 3000.0;
+    const f = 1.0 / Math.tan(fov_radians / 2);
+    const rangeInv = 1.0 / (zFar - zNear);    
+   
+
+    // in wgsl, rows are columns for matricies (inverted)
+    this.projectionMatrix = new Float32Array([
+      f / aspect, 0,          0                ,  0, // column 0
+      0,          f,          0                ,  0, // column 1
+      0,          0,  -(zFar) * rangeInv       , -1, // column 2
+      0,          0, -2*(zFar * zNear)*rangeInv,  0  // column 3
+    ]);
+  
+    this.viewMatrix = new Float32Array([
+      this.right[0],    this.up[0],    -this.forwards[0], 0, // 0 1 2 3    - column 0
+      this.right[1],    this.up[1],    -this.forwards[1], 0, // 4 5 6 7    - column 1
+      this.right[2],    this.up[2],    -this.forwards[2], 0, // 8 9 10 11  - column 2
+      // column 3
+      -vec3.dot(this.right, this.position), //  12
+      -vec3.dot(this.up, this.position),    // 13
+      vec3.dot(this.forwards, this.position), //14
+      1                                  // 15 
+  ]);
+
+    if (!this.debug0) {
+      console.log(Renderer.canvas.clientWidth, Renderer.canvas.clientHeight)
+      console.log("this.viewMatrix", this.viewMatrix)
+      console.log("this.projectionMatrix", this.projectionMatrix)
+      this.debug0= true;
+    }
+   
+    this.viewProjectionMatrix = mat4.create();
+    mat4.multiply(this.viewProjectionMatrix, this.projectionMatrix, this.viewMatrix as mat4);
+  
+    this.inverseViewProjectionMatrix = mat4.create();
+    mat4.invert(this.inverseViewProjectionMatrix, this.viewProjectionMatrix);
+  }
+
+  update() {
+    let moveDir = vec3.create(); 
+
+    // Forward / Backward
+    if (this.keysPressed.w) {
+      vec3.add(moveDir, moveDir, this.forwards);
+    }
+    if (this.keysPressed.s) {
+      vec3.sub(moveDir, moveDir, this.forwards);
+    }
+  
+    // Right / Left 
+    if (this.keysPressed.d) {
+      vec3.add(moveDir, moveDir, this.right);
+    }
+    if (this.keysPressed.a) {
+      vec3.sub(moveDir, moveDir, this.right);
+    }
+    // set y-component to 0 since we dont want any vertical movement with w,a,s,d keys
+    vec3.set(moveDir, moveDir[0], 0.0, moveDir[2])
+
+    // Up / Down
+    if (this.keysPressed.up) {
+      vec3.add(moveDir, moveDir, this.up);
+    }
+    if (this.keysPressed.down) {
+      vec3.sub(moveDir, moveDir, this.up);
+    }
+    // Normalize moveDir so that diagonal movement and axial movement is at the same speed.
+    vec3.normalize(moveDir, moveDir);
+    vec3.scale(moveDir, moveDir, this.speed * Renderer.deltaT);
+    vec3.add(this.position, this.position, moveDir);
+
+    
+    if (this.keysPressed.w == false &&
+      this.keysPressed.s == false &&
+      this.keysPressed.d == false &&
+      this.keysPressed.a == false &&
+      this.keysPressed.up == false &&
+      this.keysPressed.down == false &&
+      this.mouseActive == false
+    ) {
+      this.updatedCamera = false;
+
+    }
+    this.recalculate_vectors() 
+  }
+
+  private registerInputListeners() {
+
+    window.addEventListener('keydown', (event) => {
+      if (!this.isPointerLocked) return;
+      const key = event.key;
+      event.preventDefault();
+
+      if (key == "w" || key == "W") {
+        this.keysPressed.w = true;
+        this.updatedCamera = true;
+      } else if (key == "d" || key == "D") {
+        this.keysPressed.d = true;
+        this.updatedCamera = true;
+      } else if (key == "s" || key == "S") {
+        this.keysPressed.s = true;
+        this.updatedCamera = true;
+      } else if (key == "a" || key == "A") {
+        this.keysPressed.a = true;
+        this.updatedCamera = true;
+      } else if (key == " ") {
+        this.keysPressed.up = true;
+        this.updatedCamera = true;
+      } else if (key == "c" || key == "C" 
+        || key === "Control" || event.ctrlKey == true) {
+        this.keysPressed.down = true;
+        this.updatedCamera = true;
+      }  else if (key == "Shift") {
+        this.speed = this.speeds.fast
+      }
+      console.log(this.keysPressed.down);
+
+    });
+  
+    window.addEventListener('keyup', (event) => {
+      if (!this.isPointerLocked) return;
+      event.preventDefault();
+      const key = event.key;
+      if (key == "w" || key == "W") {
+        this.keysPressed.w = false;
+      } else if (key == "d" || key == "D") {
+        this.keysPressed.d = false;
+      } else if (key == "s" || key == "S") {
+        this.keysPressed.s = false;
+      } else if (key == "a" || key == "A") {
+        this.keysPressed.a = false;
+      } else if (key == " ") {
+        this.keysPressed.up = false;
+      } else if (key == "c" || key == "C" 
+        || key === "Control" || event.ctrlKey == true) {
+        this.keysPressed.down = false;
+      }  else if (key == "Shift") {
+        this.speed = this.speeds.normal
+      }
+
+      // if (event.ctrlKey == false) {
+      //   this.keysPressed.down = false;
+      // }   
+    });
+
+    Renderer.canvas.addEventListener('mousedown', async (event) => {
+      // 0 = Left click
+      if (event.button === 0 && !this.isPointerLocked) {
+        this.mouseActive = true;
+        await Renderer.canvas.requestPointerLock();
+        // this.isPointerLocked = true;
+
+      }
+    });
+    Renderer.canvas.addEventListener('mouseup', (event) => {
+      // 0 = Left click
+      if (event.button === 0 && this.isPointerLocked) {
+        this.mouseActive = false;
+        document.exitPointerLock();
+        // this.isPointerLocked = false;
+      }
+    });
+    document.addEventListener('pointerlockchange', () => {
+      this.isPointerLocked = (document.pointerLockElement === Renderer.canvas);
+      if (!this.isPointerLocked) {
+        this.keysPressed = {
+          w: false, a: false, s: false, d: false, 
+          up: false, down: false
+      };
+
+        this.mouseActive = false;
+        this.updatedCamera = false; 
+    }
+
+      
+  }, false);
+
+    window.addEventListener('mousemove', (e) => {
+
+      if (document.pointerLockElement === Renderer.canvas && this.isPointerLocked == true) {
+        if (Math.abs(e.movementX) > 500 || Math.abs(e.movementY) > 500) {
+          return;
+      }
+        this.yaw -= e.movementX * this.sensitivity;
+        this.pitch = this.pitchInterval.clamp(this.pitch + e.movementY * this.sensitivity);
+        this.recalculate_vectors()
+        this.updatedCamera = true;
+
+      }
+  }, false);
+
+  this.fovSlider.addEventListener('input', (event: Event) => {
+    const target = event.target as HTMLInputElement;
+    if (target) {
+      this.fov = parseInt(target.value);
+      this.fovSpan.textContent = target.value;
+      this.updatedCamera = true;
+    }
+  });
+  this.fovSlider.value = this.fov.toString();
+  this.fovSpan.textContent = this.fov.toString();
+
+  this.sensSlider.addEventListener('input', (event: Event) => {
+    const target = event.target as HTMLInputElement;
+    if (target) {
+      this.sensitivity = parseFloat(target.value);
+      this.sensSpan.textContent = target.value;
+      this.updatedCamera = true;
+      console.log(this.sensitivity);
+    }
+  });
+  this.sensitivity = parseFloat(this.sensSlider.value);
+  this.sensSpan.textContent = this.sensitivity.toString();
+
+  this.resetButton.addEventListener("click", () => {
+    this.position = this.initialTransform.position;
+    this.yaw = this.initialTransform.yaw;
+    this.pitch = this.initialTransform.pitch;
+    this.speed = this.initialTransform.speed;
+    this.sensitivity = this.initialTransform.sensitivity;
+    this.sensSlider.value = this.sensitivity.toString();
+    this.sensSpan.textContent = this.sensitivity.toString();
+    this.fov = this.initialTransform.fov;
+    this.fovSlider.value = this.fov.toString();
+    this.fovSpan.textContent = this.fov.toString();
+    this.keysPressed.w = this.initialTransform.keysPressed.w;
+    this.keysPressed.a = this.initialTransform.keysPressed.a;
+    this.keysPressed.s = this.initialTransform.keysPressed.s;
+    this.keysPressed.d = this.initialTransform.keysPressed.d;
+    this.keysPressed.up = this.initialTransform.keysPressed.up;
+    this.keysPressed.down = this.initialTransform.keysPressed.down;
+    this.mouseActive = this.initialTransform.mouseActive;
+
+
+    Renderer.frameCount = 1;
+    this.updatedCamera = true;
+  });
+} 
+
+
+}
